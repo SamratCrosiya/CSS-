@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Hexagon Physics</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap');
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505;
+            font-family: 'Orbitron', sans-serif;
+            color: white;
+            user-select: none;
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        canvas {
+            box-shadow: 0 0 50px rgba(0, 0, 0, 0.5);
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 0;
+            width: 100%;
+            text-align: center;
+            pointer-events: none;
+        }
+
+        h1 {
+            font-size: 24px;
+            margin: 0;
+            text-shadow: 0 0 10px #00ffff;
+            letter-spacing: 2px;
+        }
+
+        #gravity-timer {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #aaa;
+        }
+
+        #gravity-indicator {
+            margin-top: 5px;
+            font-size: 18px;
+            font-weight: bold;
+            color: #00ffff;
+            text-shadow: 0 0 10px #00ffff;
+            transition: color 0.3s;
+        }
+
+        .up { color: #ff0055 !important; text-shadow: 0 0 10px #ff0055 !important; }
+        
+        #controls {
+            position: absolute;
+            bottom: 30px;
+            width: 100%;
+            text-align: center;
+            pointer-events: auto;
+        }
+
+        button {
+            background: rgba(0, 255, 255, 0.1);
+            border: 1px solid #00ffff;
+            color: #00ffff;
+            padding: 10px 20px;
+            font-family: 'Orbitron', sans-serif;
+            cursor: pointer;
+            margin: 0 10px;
+            transition: all 0.2s;
+        }
+
+        button:hover {
+            background: #00ffff;
+            color: #000;
+            box-shadow: 0 0 20px #00ffff;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <h1>GRAVITY CHAMBER</h1>
+        <div id="gravity-indicator">GRAVITY: DOWN</div>
+        <div id="gravity-timer">FLIP IN: 5.0s</div>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="simCanvas"></canvas>
+    </div>
+
+    <div id="controls">
+        <button onclick="resetSim()">RESET BALLS</button>
+        <button onclick="togglePause()">PAUSE / RESUME</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        const gravInd = document.getElementById('gravity-indicator');
+        const gravTimer = document.getElementById('gravity-timer');
+
+        // --- CONFIGURATION ---
+        const BALL_COUNT = 20;
+        const BALL_RADIUS = 10;
+        const HEX_RADIUS = 250;
+        const ROTATION_SPEED = 0.01; // Radians per frame
+        const GRAVITY_FORCE = 0.15;
+        const FRICTION = 0.99; // Air resistance
+        const WALL_BOUNCE = 0.7; // Energy kept after hitting wall
+        const BALL_BOUNCE = 0.9; // Energy kept after hitting ball
+
+        // --- STATE ---
+        let width, height;
+        let cx, cy;
+        let balls = [];
+        let hexAngle = 0;
+        let gravityDirection = 1; // 1 = Down, -1 = Up
+        let lastTime = 0;
+        let gravityTimer = 5000; // ms
+        let isPaused = false;
+
+        // --- VECTOR MATH HELPERS ---
+        const vec = {
+            add: (v1, v2) => ({ x: v1.x + v2.x, y: v1.y + v2.y }),
+            sub: (v1, v2) => ({ x: v1.x - v2.x, y: v1.y - v2.y }),
+            mult: (v, s) => ({ x: v.x * s, y: v.y * s }),
+            dot: (v1, v2) => v1.x * v2.x + v1.y * v2.y,
+            mag: (v) => Math.sqrt(v.x * v.x + v.y * v.y),
+            normalize: (v) => {
+                const m = Math.sqrt(v.x * v.x + v.y * v.y);
+                return m === 0 ? { x: 0, y: 0 } : { x: v.x / m, y: v.y / m };
+            },
+            dist: (v1, v2) => Math.sqrt((v1.x - v2.x) ** 2 + (v1.y - v2.y) ** 2)
+        };
+
+        // --- CLASSES ---
+
+        class Ball {
+            constructor(x, y) {
+                this.pos = { x: x, y: y };
+                // Randomize initial velocity slightly so they don't stack perfectly
+                this.vel = { x: (Math.random() - 0.5) * 4, y: (Math.random() - 0.5) * 4 };
+                this.radius = BALL_RADIUS;
+                // Random neon color
+                const hue = Math.floor(Math.random() * 360);
+                this.color = `hsl(${hue}, 100%, 60%)`;
+                this.trail = [];
+            }
+
+            update() {
+                // Save trail
+                this.trail.push({x: this.pos.x, y: this.pos.y});
+                if(this.trail.length > 10) this.trail.shift();
+
+                // Apply Gravity
+                this.vel.y += GRAVITY_FORCE * gravityDirection;
+
+                // Apply Friction
+                this.vel.x *= FRICTION;
+                this.vel.y *= FRICTION;
+
+                // Update Position
+                this.pos.x += this.vel.x;
+                this.pos.y += this.vel.y;
+            }
+
+            draw() {
+                // Draw Trail
+                for(let i=0; i<this.trail.length; i++) {
+                    const alpha = i / this.trail.length;
+                    ctx.beginPath();
+                    ctx.fillStyle = this.color;
+                    ctx.globalAlpha = alpha * 0.3;
+                    ctx.arc(this.trail[i].x, this.trail[i].y, this.radius * (i/10), 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                ctx.globalAlpha = 1.0;
+
+                // Draw Ball
+                ctx.beginPath();
+                ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = this.color;
+                ctx.fill();
+                ctx.shadowBlur = 0;
+                
+                // Shine
+                ctx.beginPath();
+                ctx.arc(this.pos.x - 3, this.pos.y - 3, 2, 0, Math.PI * 2);
+                ctx.fillStyle = "white";
+                ctx.fill();
+            }
+        }
+
+        // --- PHYSICS ENGINE ---
+
+        function getHexVertices(angle) {
+            const vertices = [];
+            for (let i = 0; i < 6; i++) {
+                const theta = angle + i * Math.PI / 3;
+                vertices.push({
+                    x: cx + HEX_RADIUS * Math.cos(theta),
+                    y: cy + HEX_RADIUS * Math.sin(theta)
+                });
+            }
+            return vertices;
+        }
+
+        // Project point onto line segment (closest point)
+        function closestPointOnSegment(p, a, b) {
+            const ab = vec.sub(b, a);
+            const ap = vec.sub(p, a);
+            let t = vec.dot(ap, ab) / vec.dot(ab, ab);
+            t = Math.max(0, Math.min(1, t));
+            return vec.add(a, vec.mult(ab, t));
+        }
+
+        function resolveCollisions() {
+            const vertices = getHexVertices(hexAngle);
+
+            // 1. Ball vs Wall
+            balls.forEach(ball => {
+                for (let i = 0; i < 6; i++) {
+                    const p1 = vertices[i];
+                    const p2 = vertices[(i + 1) % 6]; // Next vertex, wrapping around
+
+                    // Find closest point on this wall to the ball
+                    const closest = closestPointOnSegment(ball.pos, p1, p2);
+                    const distVec = vec.sub(ball.pos, closest);
+                    const dist = vec.mag(distVec);
+
+                    // Check if ball overlaps wall (or is outside)
+                    // We check if dist < radius AND if the ball is on the "inner" side
+                    // Simplified: We assume ball starts inside. If dist < radius, push back.
+                    
+                    if (dist < ball.radius) {
+                        // Calculate Wall Normal
+                        const wallVec = vec.sub(p2, p1);
+                        // Normal pointing inward
+                        let normal = { x: -wallVec.y, y: wallVec.x }; 
+                        normal = vec.normalize(normal);
+
+                        // Ensure normal points towards center roughly
+                        const toCenter = vec.sub({x:cx, y:cy}, closest);
+                        if (vec.dot(normal, toCenter) < 0) {
+                            normal = vec.mult(normal, -1);
+                        }
+
+                        // Correction: Push ball out of wall
+                        const overlap = ball.radius - dist;
+                        ball.pos = vec.add(ball.pos, vec.mult(normal, overlap));
+
+                        // Reflect Velocity
+                        // v' = v - 2(v.n)n
+                        const dot = vec.dot(ball.vel, normal);
+                        const reflection = vec.sub(ball.vel, vec.mult(normal, 2 * dot));
+
+                        // Apply Bounce Energy Loss
+                        ball.vel = vec.mult(reflection, WALL_BOUNCE);
+
+                        // Add a bit of tangential velocity from the spinning wall
+                        const tangent = { x: -normal.y, y: normal.x };
+                        // Spin direction matters
+                        ball.vel = vec.add(ball.vel, vec.mult(tangent, ROTATION_SPEED * 10));
+                    }
+                }
+            });
+
+            // 2. Ball vs Ball
+            for (let i = 0; i < balls.length; i++) {
+                for (let j = i + 1; j < balls.length; j++) {
+                    const b1 = balls[i];
+                    const b2 = balls[j];
+
+                    const dist = vec.dist(b1.pos, b2.pos);
+                    const minDist = b1.radius + b2.radius;
+
+                    if (dist < minDist) {
+                        // Resolve Overlap
+                        const collisionVec = vec.sub(b2.pos, b1.pos);
+                        const collisionNorm = vec.normalize(collisionVec);
+                        const overlap = minDist - dist;
+
+                        // Move balls apart
+                        const moveVec = vec.mult(collisionNorm, overlap / 2);
+                        b1.pos = vec.sub(b1.pos, moveVec);
+                        b2.pos = vec.add(b2.pos, moveVec);
+
+                        // Resolve Velocity (1D Elastic Collision along normal)
+                        const relativeVel = vec.sub(b2.vel, b1.vel);
+                        const speed = vec.dot(relativeVel, collisionNorm);
+
+                        if (speed < 0) {
+                            const impulse = 2 * speed / 2; // Equal mass
+                            const impulseVec = vec.mult(collisionNorm, impulse);
+
+                            b1.vel = vec.add(b1.vel, vec.mult(impulseVec, BALL_BOUNCE));
+                            b2.vel = vec.sub(b2.vel, vec.mult(impulseVec, BALL_BOUNCE));
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- RENDERING ---
+
+        function drawHexagon() {
+            const vertices = getHexVertices(hexAngle);
+            
+            ctx.beginPath();
+            ctx.moveTo(vertices[0].x, vertices[0].y);
+            for (let i = 1; i < 6; i++) {
+                ctx.lineTo(vertices[i].x, vertices[i].y);
+            }
+            ctx.closePath();
+
+            // Glow Style
+            ctx.lineWidth = 5;
+            // Color changes based on gravity
+            const strokeColor = gravityDirection === 1 ? '#00ffff' : '#ff0055';
+            ctx.strokeStyle = strokeColor;
+            ctx.shadowColor = strokeColor;
+            ctx.shadowBlur = 20;
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+
+            // Fill slightly
+            ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+            ctx.fill();
+        }
+
+        // --- MAIN LOOP ---
+
+        function resetSim() {
+            balls = [];
+            for(let i=0; i<BALL_COUNT; i++) {
+                balls.push(new Ball(cx, cy));
+            }
+        }
+
+        function resize() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+            cx = width / 2;
+            cy = height / 2;
+        }
+
+        function togglePause() {
+            isPaused = !isPaused;
+            if(!isPaused) loop();
+        }
+
+        function loop(timestamp) {
+            if(isPaused) return;
+            if (!lastTime) lastTime = timestamp;
+            const dt = timestamp - lastTime;
+            lastTime = timestamp;
+
+            // Clear Screen
+            ctx.fillStyle = '#050505';
+            ctx.fillRect(0, 0, width, height);
+
+            // Gravity Timer Logic
+            if(dt) gravityTimer -= (timestamp - (lastTime - dt)); // Approximate delta
+            
+            // Just using delta logic for timer display
+            gravityTimer -= 16.6; // assuming ~60fps for simple decrement
+
+            if (gravityTimer <= 0) {
+                gravityDirection *= -1;
+                gravityTimer = 5000;
+                // Visual Pulse
+                gravInd.innerText = gravityDirection === 1 ? "GRAVITY: DOWN" : "GRAVITY: UP";
+                gravInd.className = gravityDirection === 1 ? "" : "up";
+            }
+            gravTimer.innerText = `FLIP IN: ${(gravityTimer/1000).toFixed(1)}s`;
+
+
+            // Rotate Hexagon
+            hexAngle += ROTATION_SPEED;
+
+            // Physics Steps
+            balls.forEach(b => b.update());
+            resolveCollisions(); // Constraint Logic
+
+            // Draw Steps
+            drawHexagon();
+            balls.forEach(b => b.draw());
+
+            requestAnimationFrame(loop);
+        }
+
+        // --- INIT ---
+        window.addEventListener('resize', resize);
+        resize();
+        resetSim();
+        requestAnimationFrame(loop);
+
+    </script>
+</body>
+</html>

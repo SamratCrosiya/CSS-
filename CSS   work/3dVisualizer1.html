@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Audio Visualizer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            overflow: hidden;
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a0a2e 50%, #0a0a0a 100%);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: white;
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #controls {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px 30px;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+        }
+
+        #controls h2 {
+            margin: 0;
+            font-size: 24px;
+            background: linear-gradient(45deg, #00f5ff, #ff00ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .control-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        #file-input {
+            display: none;
+        }
+
+        .btn {
+            background: linear-gradient(45deg, #00f5ff, #0080ff);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s;
+            box-shadow: 0 4px 15px rgba(0, 245, 255, 0.3);
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 245, 255, 0.5);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn-secondary {
+            background: linear-gradient(45deg, #ff00ff, #ff0080);
+            box-shadow: 0 4px 15px rgba(255, 0, 255, 0.3);
+        }
+
+        .btn-secondary:hover {
+            box-shadow: 0 6px 20px rgba(255, 0, 255, 0.5);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        select {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        select option {
+            background: #1a0a2e;
+            color: white;
+        }
+
+        #info {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px 20px;
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 13px;
+            max-width: 300px;
+        }
+
+        #info p {
+            margin: 5px 0;
+            opacity: 0.8;
+        }
+
+        .status {
+            color: #00f5ff;
+            font-weight: 600;
+        }
+
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 24px;
+            color: #00f5ff;
+            display: none;
+        }
+
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            border-top: 3px solid #00f5ff;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+
+    <div id="controls">
+        <h2>🎵 3D Audio Visualizer</h2>
+        <div class="control-group">
+            <input type="file" id="file-input" accept="audio/*">
+            <button class="btn" onclick="document.getElementById('file-input').click()">
+                📁 Choose Audio File
+            </button>
+            <button class="btn-secondary btn" id="play-btn" onclick="togglePlay()" disabled>
+                ▶️ Play
+            </button>
+        </div>
+        <div class="control-group">
+            <label>Visualization Mode:</label>
+            <select id="viz-mode" onchange="changeMode()">
+                <option value="sphere">Sphere Pulse</option>
+                <option value="spikes">Frequency Spikes</option>
+                <option value="wave">Wave Motion</option>
+                <option value="disco">Disco Ball</option>
+            </select>
+        </div>
+    </div>
+
+    <div id="info">
+        <p><strong>Status:</strong> <span class="status" id="status">No audio loaded</span></p>
+        <p><strong>Controls:</strong></p>
+        <p>• Drag to rotate</p>
+        <p>• Scroll to zoom</p>
+        <p>• Choose audio to begin</p>
+    </div>
+
+    <div id="loading">
+        <div class="spinner"></div>
+        Loading...
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let scene, camera, renderer, sphere, analyser, dataArray, bufferLength;
+        let audioContext, audioElement, source;
+        let isPlaying = false;
+        let vizMode = 'sphere';
+        let originalPositions = [];
+
+        // Initialize Three.js scene
+        function init() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x000000, 0.0008);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 5;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setClearColor(0x000000, 0);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // Create sphere with detailed geometry
+            const geometry = new THREE.SphereGeometry(2, 128, 128);
+            
+            // Store original positions for animation
+            const positions = geometry.attributes.position.array;
+            for (let i = 0; i < positions.length; i++) {
+                originalPositions.push(positions[i]);
+            }
+
+            const material = new THREE.MeshPhongMaterial({
+                color: 0x00ffff,
+                wireframe: true,
+                wireframeLinewidth: 2,
+                emissive: 0x0088ff,
+                emissiveIntensity: 0.3,
+                shininess: 100
+            });
+
+            sphere = new THREE.Mesh(geometry, material);
+            scene.add(sphere);
+
+            // Add ambient light
+            const ambientLight = new THREE.AmbientLight(0x404040, 2);
+            scene.add(ambientLight);
+
+            // Add point lights
+            const light1 = new THREE.PointLight(0x00ffff, 2, 100);
+            light1.position.set(10, 10, 10);
+            scene.add(light1);
+
+            const light2 = new THREE.PointLight(0xff00ff, 2, 100);
+            light2.position.set(-10, -10, -10);
+            scene.add(light2);
+
+            // Add particle system for extra effects
+            addParticles();
+
+            // Mouse controls
+            let isDragging = false;
+            let previousMousePosition = { x: 0, y: 0 };
+
+            renderer.domElement.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                previousMousePosition = { x: e.clientX, y: e.clientY };
+            });
+
+            renderer.domElement.addEventListener('mousemove', (e) => {
+                if (isDragging) {
+                    const deltaX = e.clientX - previousMousePosition.x;
+                    const deltaY = e.clientY - previousMousePosition.y;
+                    sphere.rotation.y += deltaX * 0.01;
+                    sphere.rotation.x += deltaY * 0.01;
+                    previousMousePosition = { x: e.clientX, y: e.clientY };
+                }
+            });
+
+            renderer.domElement.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+
+            // Zoom with mouse wheel
+            renderer.domElement.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                camera.position.z += e.deltaY * 0.01;
+                camera.position.z = Math.max(3, Math.min(10, camera.position.z));
+            });
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function addParticles() {
+            const particlesGeometry = new THREE.BufferGeometry();
+            const particlesCount = 1000;
+            const posArray = new Float32Array(particlesCount * 3);
+
+            for (let i = 0; i < particlesCount * 3; i++) {
+                posArray[i] = (Math.random() - 0.5) * 20;
+            }
+
+            particlesGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+
+            const particlesMaterial = new THREE.PointsMaterial({
+                size: 0.02,
+                color: 0x00ffff,
+                transparent: true,
+                opacity: 0.6
+            });
+
+            const particlesMesh = new THREE.Points(particlesGeometry, particlesMaterial);
+            scene.add(particlesMesh);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Audio setup
+        document.getElementById('file-input').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                loadAudio(file);
+            }
+        });
+
+        function loadAudio(file) {
+            document.getElementById('loading').style.display = 'block';
+            
+            if (audioElement) {
+                audioElement.pause();
+                audioElement = null;
+            }
+
+            audioElement = new Audio();
+            audioElement.src = URL.createObjectURL(file);
+            
+            audioElement.addEventListener('canplaythrough', () => {
+                setupAudioContext();
+                document.getElementById('play-btn').disabled = false;
+                document.getElementById('status').textContent = 'Audio loaded: ' + file.name;
+                document.getElementById('loading').style.display = 'none';
+            });
+
+            audioElement.addEventListener('error', () => {
+                document.getElementById('status').textContent = 'Error loading audio';
+                document.getElementById('loading').style.display = 'none';
+            });
+
+            audioElement.load();
+        }
+
+        function setupAudioContext() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 512;
+                bufferLength = analyser.frequencyBinCount;
+                dataArray = new Uint8Array(bufferLength);
+
+                source = audioContext.createMediaElementSource(audioElement);
+                source.connect(analyser);
+                analyser.connect(audioContext.destination);
+            }
+        }
+
+        function togglePlay() {
+            if (!audioElement) return;
+
+            if (isPlaying) {
+                audioElement.pause();
+                document.getElementById('play-btn').innerHTML = '▶️ Play';
+                document.getElementById('status').textContent = 'Paused';
+                isPlaying = false;
+            } else {
+                audioElement.play();
+                document.getElementById('play-btn').innerHTML = '⏸️ Pause';
+                document.getElementById('status').textContent = 'Playing...';
+                isPlaying = true;
+            }
+        }
+
+        function changeMode() {
+            vizMode = document.getElementById('viz-mode').value;
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (analyser && isPlaying) {
+                analyser.getByteFrequencyData(dataArray);
+                visualizeAudio();
+            } else {
+                sphere.rotation.y += 0.002;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function visualizeAudio() {
+            const positions = sphere.geometry.attributes.position.array;
+            const avg = dataArray.reduce((a, b) => a + b, 0) / bufferLength;
+            const normalizedAvg = avg / 255;
+
+            switch(vizMode) {
+                case 'sphere':
+                    // Pulse effect
+                    for (let i = 0; i < positions.length; i += 3) {
+                        const index = Math.floor((i / 3) / (positions.length / 3) * bufferLength);
+                        const scale = 1 + (dataArray[index] / 255) * 0.5;
+                        positions[i] = originalPositions[i] * scale;
+                        positions[i + 1] = originalPositions[i + 1] * scale;
+                        positions[i + 2] = originalPositions[i + 2] * scale;
+                    }
+                    break;
+
+                case 'spikes':
+                    // Frequency spikes
+                    for (let i = 0; i < positions.length; i += 3) {
+                        const index = Math.floor((i / 3) / (positions.length / 3) * bufferLength);
+                        const intensity = dataArray[index] / 255;
+                        const scale = 1 + intensity * 1.5;
+                        
+                        const x = originalPositions[i];
+                        const y = originalPositions[i + 1];
+                        const z = originalPositions[i + 2];
+                        const length = Math.sqrt(x * x + y * y + z * z);
+                        
+                        positions[i] = (x / length) * 2 * scale;
+                        positions[i + 1] = (y / length) * 2 * scale;
+                        positions[i + 2] = (z / length) * 2 * scale;
+                    }
+                    break;
+
+                case 'wave':
+                    // Wave motion
+                    const time = Date.now() * 0.001;
+                    for (let i = 0; i < positions.length; i += 3) {
+                        const index = Math.floor((i / 3) / (positions.length / 3) * bufferLength);
+                        const wave = Math.sin(time + i * 0.1) * (dataArray[index] / 255) * 0.3;
+                        positions[i] = originalPositions[i] + wave;
+                        positions[i + 1] = originalPositions[i + 1] + wave;
+                        positions[i + 2] = originalPositions[i + 2] + wave;
+                    }
+                    break;
+
+                case 'disco':
+                    // Disco ball effect with color changes
+                    for (let i = 0; i < positions.length; i += 3) {
+                        positions[i] = originalPositions[i];
+                        positions[i + 1] = originalPositions[i + 1];
+                        positions[i + 2] = originalPositions[i + 2];
+                    }
+                    
+                    const hue = (normalizedAvg * 360) % 360;
+                    sphere.material.color.setHSL(hue / 360, 1, 0.5);
+                    sphere.material.emissive.setHSL(hue / 360, 1, 0.3);
+                    break;
+            }
+
+            sphere.geometry.attributes.position.needsUpdate = true;
+            sphere.rotation.y += normalizedAvg * 0.05;
+            sphere.rotation.x += normalizedAvg * 0.02;
+        }
+
+        // Start
+        init();
+        animate();
+    </script>
+</body>
+</html>

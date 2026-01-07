@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Mesh Audio Visualizer</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Courier New', Courier, monospace;
+            color: white;
+        }
+
+        #canvas-container {
+            width: 100%;
+            height: 100vh;
+            display: block;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 40px;
+            border-radius: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(5px);
+            transition: opacity 0.5s;
+        }
+
+        #ui-layer.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        h1 {
+            margin-bottom: 20px;
+            font-size: 24px;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            text-shadow: 0 0 10px #00ffff;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .custom-file-upload {
+            border: 2px solid #00ffff;
+            color: #00ffff;
+            display: inline-block;
+            padding: 12px 24px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .custom-file-upload:hover {
+            background: #00ffff;
+            color: #000;
+            box-shadow: 0 0 20px #00ffff;
+        }
+
+        #status {
+            margin-top: 15px;
+            font-size: 12px;
+            opacity: 0.7;
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            z-index: 5;
+            display: none; /* Hidden until music starts */
+        }
+        
+        button {
+            background: transparent;
+            border: 1px solid white;
+            color: white;
+            padding: 5px 10px;
+            cursor: pointer;
+            text-transform: uppercase;
+        }
+        button:hover { background: white; color: black; }
+
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <h1>Sonic Sphere</h1>
+        <label for="audio-upload" class="custom-file-upload">
+            Select Audio File
+        </label>
+        <input id="audio-upload" type="file" accept="audio/*" />
+        <div id="status">Upload an MP3/WAV to begin</div>
+    </div>
+
+    <div id="controls">
+        <button id="reset-btn">Upload New Song</button>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        // --- VARIABLES ---
+        let scene, camera, renderer, sphere, geometry;
+        let audioContext, audioSource, analyser;
+        let isPlaying = false;
+        let originalPositions; // To store the original shape of the sphere
+
+        // --- 1. THREE.JS SETUP ---
+        function initThreeJS() {
+            const container = document.getElementById('canvas-container');
+
+            // Scene
+            scene = new THREE.Scene();
+            // Add some fog for depth
+            scene.fog = new THREE.FogExp2(0x000000, 0.02);
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 30;
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+            
+            const pointLight = new THREE.PointLight(0xff00ff, 1);
+            pointLight.position.set(25, 25, 25);
+            scene.add(pointLight);
+
+            const pointLight2 = new THREE.PointLight(0x00ffff, 1);
+            pointLight2.position.set(-25, -25, 25);
+            scene.add(pointLight2);
+
+            // Create The Sphere
+            // IcosahedronGeometry is better for "spiky" deformations than SphereGeometry
+            // Parameters: radius, detail (higher detail = more vertices to manipulate)
+            geometry = new THREE.IcosahedronGeometry(10, 4); 
+            
+            // Store original positions for calculation reference
+            const posAttribute = geometry.attributes.position;
+            const count = posAttribute.count;
+            originalPositions = new Float32Array(count * 3);
+            for (let i = 0; i < count * 3; i++) {
+                originalPositions[i] = posAttribute.array[i];
+            }
+            // Save to geometry for easy access later
+            geometry.userData.originalPositions = originalPositions;
+
+            // Material: Wireframe looks best for visualizers
+            const material = new THREE.MeshStandardMaterial({ 
+                color: 0xffffff,
+                wireframe: true,
+                roughness: 0.4,
+                metalness: 0.8
+            });
+
+            sphere = new THREE.Mesh(geometry, material);
+            scene.add(sphere);
+
+            // Handle Resize
+            window.addEventListener('resize', onWindowResize, false);
+            
+            animate();
+        }
+
+        // --- 2. AUDIO SETUP ---
+        const fileInput = document.getElementById('audio-upload');
+        const uiLayer = document.getElementById('ui-layer');
+        const status = document.getElementById('status');
+
+        fileInput.addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                status.innerText = "Loading audio...";
+                const reader = new FileReader();
+                
+                reader.onload = function(e) {
+                    const arrayBuffer = e.target.result;
+                    initAudio(arrayBuffer);
+                    uiLayer.classList.add('hidden'); // Hide UI
+                    document.getElementById('controls').style.display = 'block';
+                };
+                
+                reader.readAsArrayBuffer(file);
+            }
+        });
+
+        document.getElementById('reset-btn').addEventListener('click', () => {
+            window.location.reload();
+        });
+
+        function initAudio(arrayBuffer) {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            
+            audioContext.decodeAudioData(arrayBuffer, function(buffer) {
+                if(audioSource) audioSource.disconnect();
+                
+                audioSource = audioContext.createBufferSource();
+                audioSource.buffer = buffer;
+                audioSource.loop = true;
+
+                // Create Analyser
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 512; // Controls the resolution of data (must be power of 2)
+                
+                // Connect parts: Source -> Analyser -> Speakers
+                audioSource.connect(analyser);
+                analyser.connect(audioContext.destination);
+                
+                audioSource.start(0);
+                isPlaying = true;
+            });
+        }
+
+        // --- 3. ANIMATION LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Rotate the sphere slowly
+            if(sphere) {
+                sphere.rotation.x += 0.003;
+                sphere.rotation.y += 0.003;
+            }
+
+            // If audio is playing, manipulate vertices
+            if (isPlaying && analyser && sphere) {
+                updateVisuals();
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function updateVisuals() {
+            // 1. Get Audio Data
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            analyser.getByteFrequencyData(dataArray);
+
+            // 2. Manipulate Vertices
+            const positions = geometry.attributes.position.array;
+            const originalPos = geometry.userData.originalPositions;
+            const count = geometry.attributes.position.count;
+
+            // Calculate average bass frequency (usually lower indices)
+            let lowerSum = 0;
+            for(let i=0; i<bufferLength/4; i++) {
+                lowerSum += dataArray[i];
+            }
+            const bassLevel = lowerSum / (bufferLength/4);
+            
+            // Dynamic Color Change based on bass
+            const r = 0.5 + (bassLevel / 255);
+            const g = 0.2; 
+            const b = 1.0 - (bassLevel / 255);
+            sphere.material.color.setRGB(r, g, b);
+
+            // Loop through every vertex
+            for (let i = 0; i < count; i++) {
+                // Get the original X,Y,Z of this vertex
+                const ox = originalPos[i * 3];
+                const oy = originalPos[i * 3 + 1];
+                const oz = originalPos[i * 3 + 2];
+
+                // Determine which frequency affects this vertex
+                // We map the vertex index to a position in the frequency array
+                // We use modulo (%) to wrap around if there are more vertices than frequencies
+                const offset = dataArray[i % bufferLength];
+                
+                // Calculate distortion amount
+                // We want the sphere to expand outward based on volume (offset)
+                // 10 is the base radius
+                const amp = 0.1; // sensitivity
+                const time = Date.now() * 0.001;
+                
+                // Use some trig functions + audio data to create "noise"
+                // This makes the spikes move in a wavy pattern rather than just straight out
+                const noise = (offset * amp) * Math.sin(time + i);
+
+                // Calculate the scaling factor
+                // Normalize the vector (1.0) + audio distortion
+                const scale = 1 + (noise / 100); 
+
+                // Apply new position
+                positions[i * 3] = ox * scale;
+                positions[i * 3 + 1] = oy * scale;
+                positions[i * 3 + 2] = oz * scale;
+            }
+
+            // Important: Tell Three.js the geometry has changed
+            geometry.attributes.position.needsUpdate = true;
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Start
+        initThreeJS();
+
+    </script>
+</body>
+</html>

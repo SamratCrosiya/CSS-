@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Octahedron - Audio Edition</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* --- UI STYLING --- */
+        #ui {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            text-align: center;
+            z-index: 10;
+            
+            /* Glassmorphism Panel */
+            background: rgba(0, 0, 0, 0.6);
+            padding: 20px 40px;
+            border-radius: 20px;
+            border: 1px solid rgba(0, 255, 255, 0.3);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.1);
+        }
+
+        h1 {
+            font-size: 16px;
+            margin: 0 0 5px 0;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            text-shadow: 0 0 10px #00ffff;
+        }
+
+        p {
+            font-size: 12px;
+            color: #aaa;
+            margin: 0 0 15px 0;
+        }
+
+        /* --- AUDIO BUTTON STYLING --- */
+        #audio-btn {
+            background: transparent;
+            color: #00ffff;
+            font-family: 'Segoe UI', sans-serif;
+            font-weight: bold;
+            font-size: 12px;
+            border: 1px solid #00ffff;
+            padding: 10px 20px;
+            border-radius: 30px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin: 0 auto;
+        }
+
+        #audio-btn:hover {
+            background: #00ffff;
+            color: #000;
+            box-shadow: 0 0 15px #00ffff;
+        }
+
+        /* Animate the icon when playing */
+        .playing-icon {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background-color: currentColor;
+            border-radius: 50%;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.5); opacity: 0.5; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        /* Hide the actual YouTube iframe so it looks like background audio */
+        #hidden-player {
+            position: absolute;
+            top: -9999px;
+            left: -9999px;
+            visibility: hidden;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="ui">
+        <h1>Containment Field</h1>
+        <p>Insomnia (Slowed + Reverb)</p>
+        <button id="audio-btn" onclick="toggleMusic()">
+            <span>▶</span> Initialize Audio
+        </button>
+    </div>
+
+    <div id="hidden-player"></div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        // ===================================================================
+        // 🎵 AUDIO CODE START (COPY THIS SECTION FOR OTHER PROJECTS)
+        // ===================================================================
+
+        // 1. Configuration
+        const YOUTUBE_VIDEO_ID = 'P5QKzvX-WCI'; // Insomnia (Slowed) ID
+        let player;
+        let isMusicPlaying = false;
+        const btn = document.getElementById('audio-btn');
+
+        // 2. Load the YouTube IFrame Player API code asynchronously
+        var tag = document.createElement('script');
+        tag.src = "https://www.youtube.com/iframe_api";
+        var firstScriptTag = document.getElementsByTagName('script')[0];
+        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+        // 3. This function creates an <iframe> (and YouTube player)
+        //    after the API code downloads.
+        function onYouTubeIframeAPIReady() {
+            player = new YT.Player('hidden-player', {
+                height: '0',
+                width: '0',
+                videoId: YOUTUBE_VIDEO_ID,
+                playerVars: {
+                    'playsinline': 1,
+                    'controls': 0,
+                    'loop': 1,         // Loop the song
+                    'playlist': YOUTUBE_VIDEO_ID // Required for loop to work
+                },
+                events: {
+                    'onReady': onPlayerReady
+                }
+            });
+        }
+
+        // 4. The API will call this function when the video player is ready.
+        function onPlayerReady(event) {
+            // Player is ready, but we wait for user interaction to play
+            console.log("Audio Engine Ready");
+        }
+
+        // 5. Control Function (Connected to the Button)
+        function toggleMusic() {
+            if (!player) return;
+
+            if (isMusicPlaying) {
+                player.pauseVideo();
+                isMusicPlaying = false;
+                btn.innerHTML = '<span>▶</span> Resume Audio';
+                btn.style.boxShadow = 'none';
+                btn.style.background = 'transparent';
+                btn.style.color = '#00ffff';
+            } else {
+                player.playVideo();
+                isMusicPlaying = true;
+                btn.innerHTML = '<span class="playing-icon"></span> Playing';
+                btn.style.boxShadow = '0 0 15px #00ffff'; // Glow effect
+            }
+        }
+        
+        // ===================================================================
+        // 🎵 AUDIO CODE END
+        // ===================================================================
+
+
+        // --- 3D SCENE SETUP (VISUALS) ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x000000, 0.03);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.z = 12;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.toneMapping = THREE.ReinhardToneMapping;
+        container.appendChild(renderer.domElement);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0x222222);
+        scene.add(ambientLight);
+        const pointLight = new THREE.PointLight(0xffffff, 1, 50);
+        scene.add(pointLight);
+        const lightBlue = new THREE.PointLight(0x00ffff, 2, 30);
+        lightBlue.position.set(10, 10, 10);
+        scene.add(lightBlue);
+        const lightPink = new THREE.PointLight(0xff00ff, 2, 30);
+        lightPink.position.set(-10, -10, 10);
+        scene.add(lightPink);
+
+        // Octahedron
+        const octRadius = 6;
+        const octGeometry = new THREE.OctahedronGeometry(octRadius, 0);
+        const glassMaterial = new THREE.MeshPhysicalMaterial({
+            color: 0xffffff, metalness: 0, roughness: 0,
+            transmission: 0.9, opacity: 1, transparent: true,
+            thickness: 1.0, clearcoat: 1.0, side: THREE.DoubleSide
+        });
+        const octahedron = new THREE.Mesh(octGeometry, glassMaterial);
+        scene.add(octahedron);
+
+        const edges = new THREE.EdgesGeometry(octGeometry);
+        const lineMaterial = new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 2 });
+        const wireframe = new THREE.LineSegments(edges, lineMaterial);
+        octahedron.add(wireframe);
+
+        // Balls
+        const ballRadius = 0.6;
+        const ballGeometry = new THREE.SphereGeometry(ballRadius, 32, 32);
+        const balls = [];
+        const colors = [0xff0055, 0x00ffaa, 0xffaa00];
+        const gravity = new THREE.Vector3(0, -9.8, 0);
+        const bounceDamping = 0.8;
+        const friction = 0.995;
+
+        for (let i = 0; i < 3; i++) {
+            const material = new THREE.MeshStandardMaterial({
+                color: colors[i], emissive: colors[i], emissiveIntensity: 0.8,
+                roughness: 0.1, metalness: 0.5
+            });
+            const mesh = new THREE.Mesh(ballGeometry, material);
+            mesh.position.set((Math.random()-0.5), (Math.random()-0.5), (Math.random()-0.5));
+            scene.add(mesh);
+            balls.push({
+                mesh: mesh,
+                velocity: new THREE.Vector3((Math.random()-0.5)*5, (Math.random()-0.5)*5, (Math.random()-0.5)*5)
+            });
+        }
+
+        // Physics Logic
+        const faceDistance = octRadius / Math.sqrt(3);
+        const clock = new THREE.Clock();
+
+        function updatePhysics(deltaTime) {
+            const dt = Math.min(deltaTime, 0.05);
+            balls.forEach(ball => {
+                ball.velocity.addScaledVector(gravity, dt);
+                ball.velocity.multiplyScalar(friction);
+                ball.mesh.position.addScaledVector(ball.velocity, dt);
+
+                const invMatrix = new THREE.Matrix4().copy(octahedron.matrixWorld).invert();
+                const localPos = ball.mesh.position.clone().applyMatrix4(invMatrix);
+
+                const signX = Math.sign(localPos.x) || 1;
+                const signY = Math.sign(localPos.y) || 1;
+                const signZ = Math.sign(localPos.z) || 1;
+                const normal = new THREE.Vector3(signX, signY, signZ).normalize();
+                
+                const dist = localPos.dot(normal);
+                const limit = faceDistance - ballRadius;
+
+                if (dist > limit) {
+                    const penetration = dist - limit;
+                    localPos.sub(normal.clone().multiplyScalar(penetration));
+                    ball.mesh.position.copy(localPos.applyMatrix4(octahedron.matrixWorld));
+
+                    const worldNormal = normal.clone().transformDirection(octahedron.matrixWorld);
+                    const vDotN = ball.velocity.dot(worldNormal);
+                    if (vDotN > 0) {
+                        ball.velocity.sub(worldNormal.multiplyScalar(2 * vDotN));
+                        ball.velocity.multiplyScalar(bounceDamping);
+                        ball.velocity.add(worldNormal.multiplyScalar(0.5));
+                    }
+                }
+            });
+        }
+
+        // Animation Loop
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+
+            octahedron.rotation.x += 0.005;
+            octahedron.rotation.y += 0.01;
+
+            // Optional: Make lights pulse to the beat visually (fake effect)
+            if (isMusicPlaying) {
+                const time = Date.now() * 0.002;
+                lightBlue.intensity = 2 + Math.sin(time * 2) * 1; 
+                lightPink.intensity = 2 + Math.cos(time * 2) * 1;
+            }
+
+            updatePhysics(delta);
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+
+    </script>
+</body>
+</html>

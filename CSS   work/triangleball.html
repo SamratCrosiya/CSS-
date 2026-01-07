@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Evolving Polygon Physics</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&display=swap');
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050510;
+            font-family: 'Rajdhani', sans-serif;
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #canvas-container {
+            position: relative;
+            box-shadow: 0 0 50px rgba(0,0,0,0.5);
+        }
+
+        canvas {
+            display: block;
+        }
+
+        /* --- UI Overlay --- */
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .stat-box {
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(5px);
+            border-left: 4px solid #00f7ff;
+            padding: 10px 20px;
+            border-radius: 0 5px 5px 0;
+            text-shadow: 0 0 5px rgba(0, 247, 255, 0.5);
+        }
+
+        .label {
+            font-size: 12px;
+            color: #aaa;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        #reset-btn {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: transparent;
+            color: #00f7ff;
+            border: 1px solid #00f7ff;
+            padding: 10px 30px;
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 16px;
+            font-weight: bold;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: 0.3s;
+            pointer-events: auto;
+        }
+
+        #reset-btn:hover {
+            background: #00f7ff;
+            color: #000;
+            box-shadow: 0 0 20px #00f7ff;
+        }
+
+        /* Shake animation class */
+        .shake {
+            animation: shake 0.2s cubic-bezier(.36,.07,.19,.97) both;
+        }
+
+        @keyframes shake {
+            10%, 90% { transform: translate3d(-1px, 0, 0); }
+            20%, 80% { transform: translate3d(2px, 0, 0); }
+            30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
+            40%, 60% { transform: translate3d(4px, 0, 0); }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div class="stat-box" style="border-color: #ff0055;">
+            <div class="label">Polygon Sides</div>
+            <div class="value" id="sides-val">3</div>
+        </div>
+        <div class="stat-box" style="border-color: #00f7ff;">
+            <div class="label">Velocity</div>
+            <div class="value" id="speed-val">0</div>
+        </div>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="simCanvas"></canvas>
+    </div>
+
+    <button id="reset-btn" onclick="resetSimulation()">Reset System</button>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        const container = document.getElementById('canvas-container');
+        
+        // --- CONFIGURATION ---
+        const CONFIG = {
+            initialSides: 3,
+            initialSpeed: 4,
+            speedIncrement: 1.1, // 10% faster per hit
+            maxSpeed: 40,        // Cap to prevent physics breaking
+            polygonRadius: 250,
+            ballRadius: 10,
+            friction: 1.0,       // No energy loss
+            colors: {
+                bg: '#050510',
+                ball: '#ffffff'
+            }
+        };
+
+        // --- STATE ---
+        let sides = CONFIG.initialSides;
+        let ball = { x: 0, y: 0, vx: 0, vy: 0, trail: [] };
+        let particles = [];
+        let polygonVertices = [];
+        let hue = 0; // For dynamic coloring
+
+        // --- MATH HELPERS ---
+        const vec = {
+            add: (v1, v2) => ({ x: v1.x + v2.x, y: v1.y + v2.y }),
+            sub: (v1, v2) => ({ x: v1.x - v2.x, y: v1.y - v2.y }),
+            dot: (v1, v2) => v1.x * v2.x + v1.y * v2.y,
+            mag: (v) => Math.sqrt(v.x * v.x + v.y * v.y),
+            norm: (v) => {
+                const m = Math.sqrt(v.x * v.x + v.y * v.y);
+                return m === 0 ? {x:0, y:0} : {x: v.x/m, y: v.y/m};
+            },
+            mult: (v, s) => ({ x: v.x * s, y: v.y * s })
+        };
+
+        // --- INITIALIZATION ---
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            resetSimulation();
+        }
+
+        function resetSimulation() {
+            sides = CONFIG.initialSides;
+            
+            // Start ball in center
+            ball.x = canvas.width / 2;
+            ball.y = canvas.height / 2;
+            
+            // Random start direction
+            const angle = Math.random() * Math.PI * 2;
+            ball.vx = Math.cos(angle) * CONFIG.initialSpeed;
+            ball.vy = Math.sin(angle) * CONFIG.initialSpeed;
+            ball.trail = [];
+            
+            particles = [];
+            updatePolygon();
+            updateUI();
+        }
+
+        function updatePolygon() {
+            polygonVertices = [];
+            const cx = canvas.width / 2;
+            const cy = canvas.height / 2;
+            const angleStep = (Math.PI * 2) / sides;
+            
+            // Rotation offset to make bottom flat for odd polygons (optional aesthetic)
+            const rotationOffset = -Math.PI / 2; 
+
+            for (let i = 0; i < sides; i++) {
+                const x = cx + CONFIG.polygonRadius * Math.cos(i * angleStep + rotationOffset);
+                const y = cy + CONFIG.polygonRadius * Math.sin(i * angleStep + rotationOffset);
+                polygonVertices.push({ x, y });
+            }
+        }
+
+        // --- PARTICLES ---
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 3 + 1;
+                this.vx = Math.cos(angle) * speed;
+                this.vy = Math.sin(angle) * speed;
+                this.life = 1.0;
+                this.decay = Math.random() * 0.03 + 0.01;
+                this.color = color;
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.life -= this.decay;
+            }
+            draw(ctx) {
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, 2, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1.0;
+            }
+        }
+
+        // --- PHYSICS ENGINE ---
+        function updatePhysics() {
+            // Calculate current speed magnitude
+            const speedMag = Math.sqrt(ball.vx**2 + ball.vy**2);
+            
+            // SUB-STEPPING:
+            // At high speeds, the ball moves pixel distances larger than the wall thickness.
+            // We break the movement into smaller steps to ensure we catch the collision.
+            const steps = Math.ceil(speedMag / 5) + 1; 
+            
+            for(let s = 0; s < steps; s++) {
+                // Move fraction of velocity
+                ball.x += ball.vx / steps;
+                ball.y += ball.vy / steps;
+
+                // Check collision against all walls
+                for (let i = 0; i < sides; i++) {
+                    const p1 = polygonVertices[i];
+                    const p2 = polygonVertices[(i + 1) % sides]; // Loop back to start
+
+                    checkWallCollision(p1, p2);
+                }
+            }
+
+            // Update trail
+            ball.trail.push({ x: ball.x, y: ball.y });
+            if (ball.trail.length > 20) ball.trail.shift();
+
+            // Update particles
+            for (let i = particles.length - 1; i >= 0; i--) {
+                particles[i].update();
+                if (particles[i].life <= 0) particles.splice(i, 1);
+            }
+        }
+
+        function checkWallCollision(p1, p2) {
+            // Vector of the wall
+            const wall = vec.sub(p2, p1);
+            // Vector from p1 to ball
+            const ballToP1 = vec.sub({x: ball.x, y: ball.y}, p1);
+            
+            // Project ball onto wall line (dot product) to find closest point
+            const wallLen = vec.mag(wall);
+            const wallNorm = vec.norm(wall); // Unit vector of wall
+            
+            // Distance along the wall
+            let t = vec.dot(ballToP1, wallNorm);
+            
+            // Clamp t to segment (0 to length)
+            // This ensures we collide with the SEGMENT, not the infinite line
+            let closest;
+            if (t < 0) closest = p1;
+            else if (t > wallLen) closest = p2;
+            else closest = vec.add(p1, vec.mult(wallNorm, t));
+
+            // Distance from ball to closest point on wall
+            const distVec = vec.sub({x: ball.x, y: ball.y}, closest);
+            const dist = vec.mag(distVec);
+
+            if (dist < CONFIG.ballRadius) {
+                // COLLISION DETECTED
+                
+                // 1. Calculate Wall Normal (Perpendicular)
+                // In 2D, normal of (dx, dy) is (-dy, dx) or (dy, -dx)
+                // We need the one pointing towards the center of the polygon
+                const center = { x: canvas.width/2, y: canvas.height/2 };
+                const toCenter = vec.sub(center, closest);
+                
+                let normal = { x: -wallNorm.y, y: wallNorm.x };
+                if (vec.dot(normal, toCenter) < 0) {
+                    normal = { x: wallNorm.y, y: -wallNorm.x };
+                }
+
+                // 2. Reflect Velocity
+                // V_new = V_old - 2(V_old . N)N
+                const v = { x: ball.vx, y: ball.vy };
+                const dot = vec.dot(v, normal);
+                
+                // Only reflect if moving towards wall
+                if (dot < 0) {
+                    const reflect = vec.sub(v, vec.mult(normal, 2 * dot));
+                    
+                    // Apply speed increase
+                    let speed = vec.mag(reflect);
+                    speed = Math.min(speed * CONFIG.speedIncrement, CONFIG.maxSpeed);
+                    
+                    const newDir = vec.norm(reflect);
+                    ball.vx = newDir.x * speed;
+                    ball.vy = newDir.y * speed;
+
+                    // 3. Resolve Overlap (Push ball out)
+                    const overlap = CONFIG.ballRadius - dist;
+                    ball.x += normal.x * overlap;
+                    ball.y += normal.y * overlap;
+
+                    // 4. Game Logic
+                    sides++;
+                    updatePolygon();
+                    updateUI();
+                    triggerVisualEffects(closest.x, closest.y);
+                }
+            }
+        }
+
+        // --- VISUAL EFFECTS ---
+        function triggerVisualEffects(x, y) {
+            // Spawn particles
+            const color = `hsl(${hue}, 100%, 60%)`;
+            for(let i=0; i<15; i++) {
+                particles.push(new Particle(x, y, color));
+            }
+
+            // Screen Shake
+            container.classList.remove('shake');
+            void container.offsetWidth; // Trigger reflow
+            container.classList.add('shake');
+        }
+
+        function updateUI() {
+            document.getElementById('sides-val').innerText = sides;
+            
+            // Calculate speed
+            const speed = Math.sqrt(ball.vx**2 + ball.vy**2);
+            document.getElementById('speed-val').innerText = speed.toFixed(1);
+            
+            // Dynamic Hue based on sides
+            hue = (sides * 25) % 360;
+            
+            // Colorize UI
+            document.querySelector('.stat-box:nth-child(1)').style.borderColor = `hsl(${hue}, 100%, 50%)`;
+        }
+
+        // --- RENDERING ---
+        function draw() {
+            // Clear screen with opacity for trail effect (optional, but I used manual trail array instead for cleaner look)
+            ctx.fillStyle = CONFIG.colors.bg;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const dynamicColor = `hsl(${hue}, 100%, 60%)`;
+            const glowColor = `hsl(${hue}, 100%, 30%)`;
+
+            // Draw Particles
+            particles.forEach(p => p.draw(ctx));
+
+            // Draw Polygon
+            ctx.beginPath();
+            if (polygonVertices.length > 0) {
+                ctx.moveTo(polygonVertices[0].x, polygonVertices[0].y);
+                for (let i = 1; i < polygonVertices.length; i++) {
+                    ctx.lineTo(polygonVertices[i].x, polygonVertices[i].y);
+                }
+                ctx.closePath();
+            }
+            
+            // Polygon Style
+            ctx.strokeStyle = dynamicColor;
+            ctx.lineWidth = 5;
+            ctx.lineJoin = 'round';
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = dynamicColor;
+            ctx.stroke();
+            
+            // Faint fill
+            ctx.fillStyle = glowColor;
+            ctx.globalAlpha = 0.1;
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+            ctx.shadowBlur = 0; // Reset shadow for other elements
+
+            // Draw Ball Trail
+            if (ball.trail.length > 1) {
+                ctx.beginPath();
+                ctx.moveTo(ball.trail[0].x, ball.trail[0].y);
+                for (let i = 1; i < ball.trail.length; i++) {
+                    ctx.lineTo(ball.trail[i].x, ball.trail[i].y);
+                }
+                ctx.strokeStyle = `rgba(255, 255, 255, 0.2)`;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+
+            // Draw Ball
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, CONFIG.ballRadius, 0, Math.PI * 2);
+            ctx.fillStyle = '#fff';
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = '#fff';
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+
+        // --- LOOP ---
+        function loop() {
+            updatePhysics();
+            draw();
+            requestAnimationFrame(loop);
+        }
+
+        // Start
+        window.addEventListener('resize', resize);
+        resize(); // Initialize
+        loop();
+
+    </script>
+</body>
+</html>
